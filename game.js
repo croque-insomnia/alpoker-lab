@@ -92,6 +92,18 @@ function e5(a) {
                     : 0;
   return c * 1e10 + g.reduce((v, x) => v * 15 + x, 0);
 }
+// 役の名前（e5 / best が返す値を 1e10 で割った整数が添字）
+const HN = [
+  "ハイカード",
+  "ワンペア",
+  "ツーペア",
+  "スリーカード",
+  "ストレート",
+  "フラッシュ",
+  "フルハウス",
+  "フォーカード",
+  "ストレートフラッシュ",
+];
 function best(a) {
   let m = 0;
   if (a.length == 5) return e5(a);
@@ -545,6 +557,15 @@ function* hand(T) {
   let cur = Math.max(s0.bet, b0.bet),
     minR = bb;
   const live = () => ps.filter((p) => !p.fold);
+  // これ以上ベットが起きない（残りが全員オールイン、または1人以外オールイン）なら、手札を表にする
+  let shown = 0;
+  const reveal = () => {
+    const L = live();
+    if (shown || L.length < 2 || L.filter((p) => !p.allin).length > 1) return;
+    shown = 1;
+    L.forEach((p) => (p.show = 1));
+    lg("オールイン：手札を公開");
+  };
   lg(`--- ハンド開始 (Lv${G.lv + 1}) ---`);
   function* rnd(first) {
     let i = first;
@@ -622,6 +643,7 @@ function* hand(T) {
     }
   }
   yield* rnd(n == 2 ? 0 : 3 % n);
+  reveal();
   for (const k of [3, 1, 1]) {
     if (live().length < 2) break;
     for (let j = 0; j < k; j++) bd.push(d.pop());
@@ -633,6 +655,7 @@ function* hand(T) {
     minR = bb;
     yield { k: "tick" };
     yield* rnd(1);
+    reveal();
   }
   const L = live(),
     sd = L.length > 1;
@@ -640,6 +663,7 @@ function* hand(T) {
     L.forEach((p) => {
       p.v = best(p.h.concat(bd));
       p.show = 1;
+      lg(`${p.name}：${p.h.map((c) => cd(c)).join("")}（${HN[(p.v / 1e10) | 0]}）`);
     });
   let prev = 0;
   for (const m of [...new Set(L.map((p) => p.tot))].sort((a, b) => a - b)) {
@@ -656,7 +680,9 @@ function* hand(T) {
   }
   yield { k: "end" };
 }
+// バストした人は T.gone に入れて、次のハンドまで席に表示しておく
 function bust(T) {
+  T.gone = [];
   T.p = T.p.filter((p) => {
     if (p.stack > 0 || p.hero) return 1;
     if (G.lv < 2 && !p.re && R() < 0.5) {
@@ -666,6 +692,7 @@ function bust(T) {
       return 1;
     }
     p.alive = 0;
+    T.gone.push(p);
     return 0;
   });
 }
@@ -728,6 +755,7 @@ function end() {
 function nx() {
   G.wait = 0;
   G.lg = [];
+  G.tables.forEach((t) => (t.gone = []));
   const o = G.T;
   while (Date.now() >= G.lvEnd && G.lv < 12) {
     G.lv++;
@@ -791,9 +819,10 @@ function render() {
     tmr();
   }
   const seat = (p) =>
-    `<div class="s${p.fold ? " f" : ""}${G.req && G.req.p == p ? " a" : ""}${p.hero ? " h" : ""}"><b style="color:${p.col || "inherit"}">${p.name}</b> <small>${p.hero || !G.ty ? "" : p.ty[0]} ${p.lab || ""}</small><div>${fb(p.stack)} BB</div><div>${p.h ? p.h.map((c) => cd(c, !p.hero && !p.show)).join("") : "&nbsp;"}</div><em>${p.bet ? "bet " + fb(p.bet) : ""}</em></div>`;
+    `<div class="s${p.fold ? " f" : ""}${G.req && G.req.p == p ? " a" : ""}${p.hero ? " h" : ""}"><b style="color:${p.col || "inherit"}">${p.name}</b> <small>${p.hero || !G.ty ? "" : p.ty[0]} ${p.lab || ""}${p.alive ? "" : " バスト"}</small><div>${fb(p.stack)} BB</div><div>${p.h ? p.h.map((c) => cd(c, !p.hero && !p.show)).join("") : "&nbsp;"}</div><em>${p.bet ? "bet " + fb(p.bet) : ""}</em></div>`;
   const pot = (T.ps || []).reduce((s, p) => s + p.tot, 0);
   $("tb").innerHTML = `<div class=row>${T.p
+    .concat(T.gone || [])
     .filter((p) => !p.hero)
     .map(seat)
     .join(
