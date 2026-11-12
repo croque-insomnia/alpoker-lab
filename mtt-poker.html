@@ -36,6 +36,8 @@ const $=i=>document.getElementById(i),R=Math.random,SU='♠♥♦♣',RK='234567
 const LV=[[100,200,50],[140,280,70],[200,400,100],[280,560,140],[390,780,200],[550,1100,280],[820,1640,410],[1250,2500,630],[1900,3800,950],[2850,5700,1400],[4300,8600,2200],[6500,13000,3200],[9800,19600,4900]];
 const TY=[['タイト',.2,.35,.1],['ルースアグレ',.7,.75,.35],['コーラー',.8,.15,.02],['マニアック',.95,.9,.5],['バランス',.45,.5,.2],['ICM意識',.4,.45,.15,1]];
 const NM='Aki Ren Sora Yuu Hina Kai Mio Rin Haru Ken Nao Sho Mei Ryo Yui Dai Emi Jun Ayu Tom Saki Riku Nana Ito Mao Taku Rei Kou Mana Shin Ami Lee Max Eva Leo Zoe Jin Noa Hal'.split(' ');
+// Fisher-Yatesシャッフル：全ての並びが等確率になる（sort+乱数比較は偏る）
+const shf=a=>{for(let i=a.length-1;i>0;i--){const j=R()*(i+1)|0;[a[i],a[j]]=[a[j],a[i]]}return a};
 let G={},S={n:0,w:0,ft:0,itm:0,pt:0};
 try{S=Object.assign(S,JSON.parse(localStorage.getItem('mtt5')))}catch(e){}
 $('st').textContent=S.n?`戦績：${S.n}回 / 優勝${S.w} / FT${S.ft} / ITM${S.itm} / 仮pt合計${S.pt}`:'';
@@ -105,7 +107,7 @@ function* hand(T){const lg=s=>{if(T==G.T)G.lg.push(s)},[sb,bb,an]=LV[G.lv];
 T.p.forEach(p=>{p.h=null;p.lab='';p.show=0;p.fold=0;p.bet=0;p.tot=0;p.allin=0;p.acted=0;p.pfr=0});
 const A=T.p.filter(p=>p.stack>0),n=A.length;if(n<2)return;
 let bi=(A.findIndex(p=>p.id==T.btn)+1)%n;const ps=A.slice(bi).concat(A.slice(0,bi));T.btn=ps[0].id;T.ps=ps;
-const d=[...Array(52).keys()].sort(()=>R()-.5),bd=T.bd=[];ps.forEach(p=>p.h=[d.pop(),d.pop()]);
+const d=shf([...Array(52).keys()]),bd=T.bd=[];ps.forEach(p=>p.h=[d.pop(),d.pop()]);
 const put=(p,x)=>{x=Math.min(x,p.stack);p.stack-=x;p.bet+=x;p.tot+=x;if(!p.stack)p.allin=1};
 ps.forEach(p=>{const x=Math.min(an,p.stack);p.stack-=x;p.tot+=x;if(!p.stack)p.allin=1});
 const s0=n==2?ps[0]:ps[1],b0=n==2?ps[1]:ps[2];ps[0].lab='D';s0.lab+=' SB';b0.lab+=' BB';put(s0,sb);put(b0,bb);
@@ -171,8 +173,8 @@ function A(t){G.req=null;step(t=='r'?{t,x:G.rx}:{t})}
 function TY2(v){G.ty=v;try{localStorage.setItem('mtt5ty',v?1:0)}catch(e){}render()}
 function tmr(){const e=$('tm');if(e&&G.lvEnd){const t=Math.max(0,G.lvEnd-Date.now())/1000|0,s=(t/60|0)+':'+String(t%60).padStart(2,'0');if(e.textContent!=s)e.textContent=s}}
 setInterval(tmr,500);
-function begin(){G={dur:+$('spd').value*6e4,lv:0,entries:40,lg:[],ty:ls()};$('tyc').checked=G.ty;G.lvEnd=Date.now()+G.dur;const nm=[...NM].sort(()=>R()-.5);G.P=[];
+function begin(){G={dur:+$('spd').value*6e4,lv:0,entries:40,lg:[],ty:ls()};$('tyc').checked=G.ty;G.lvEnd=Date.now()+G.dur;const nm=shf([...NM]);G.P=[];
 for(let i=0;i<40;i++){const t=TY[i%6];G.P.push(i&&i<4?{id:i,name:NC[i-1][0],k:NC[i-1][0],col:NC[i-1][1],ty:['ネームド'],l:NC[i-1][2],a:NC[i-1][3],b:NC[i-1][4],stack:1e4,re:0,alive:1}:i?{id:i,name:nm[i-1],ty:t,l:t[1]+(R()-.5)*.1,a:t[2]+(R()-.5)*.1,b:t[3],icm:t[4],stack:1e4,re:0,alive:1}:{id:0,name:'あなた',hero:1,ty:['—'],stack:1e4,re:0,alive:1})}
-const sh=[...G.P].sort(()=>R()-.5);G.tables=[];for(let i=0;i<8;i++)G.tables.push({p:sh.slice(i*5,i*5+5),btn:-1});
+const sh=shf([...G.P]);G.tables=[];for(let i=0;i<8;i++)G.tables.push({p:sh.slice(i*5,i*5+5),btn:-1});
 G.hero=G.P[0];G.P.filter(p=>p.k).forEach(n=>{const h=G.tables.find(t=>t.p.includes(G.hero)),tn=G.tables.find(t=>t.p.includes(n)),w=R()<.35;if(w==(tn==h))return;const t2=w?h:G.tables.filter(t=>t!=h)[R()*7|0],cn=t2.p.filter(x=>!x.k&&!x.hero);if(!cn.length)return;const q=cn[R()*cn.length|0];tn.p[tn.p.indexOf(n)]=q;t2.p[t2.p.indexOf(q)]=n});G.T=G.tables.find(t=>t.p.includes(G.hero));$('start').hidden=1;$('game').hidden=0;nx()}
 </script></body></html>
