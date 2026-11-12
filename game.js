@@ -17,13 +17,15 @@ const LV = [
   [6500, 13000, 3200],
   [9800, 19600, 4900],
 ];
+// CPUタイプ: [名前, ルーズさ, 攻撃性, ブラフ頻度, ICM意識, 読みの強さ]
+// 読みの強さ = 相手のベット・レイズからどれだけ相手の手を絞るか（0: 気にしない 〜 1: 強く信じる）
 const TY = [
-  ["タイト", 0.2, 0.35, 0.1],
-  ["ルースアグレ", 0.7, 0.75, 0.35],
-  ["コーラー", 0.8, 0.15, 0.02],
-  ["マニアック", 0.95, 0.9, 0.5],
-  ["バランス", 0.45, 0.5, 0.2],
-  ["ICM意識", 0.4, 0.45, 0.15, 1],
+  ["タイト", 0.2, 0.35, 0.1, 0, 0.7],
+  ["ルースアグレ", 0.7, 0.75, 0.35, 0, 0.4],
+  ["コーラー", 0.8, 0.15, 0.02, 0, 0.1],
+  ["マニアック", 0.95, 0.9, 0.5, 0, 0.2],
+  ["バランス", 0.45, 0.5, 0.2, 0, 0.5],
+  ["ICM意識", 0.4, 0.45, 0.15, 1, 0.6],
 ];
 const NM =
   "Aki Ren Sora Yuu Hina Kai Mio Rin Haru Ken Nao Sho Mei Ryo Yui Dai Emi Jun Ayu Tom Saki Riku Nana Ito Mao Taku Rei Kou Mana Shin Ami Lee Max Eva Leo Zoe Jin Noa Hal".split(
@@ -100,7 +102,51 @@ function best(a) {
       for (let j = i + 1; j < 7; j++) m = Math.max(m, e5(a.filter((_, k) => k != i && k != j)));
   return m;
 }
-function pre(h) {
+// 169種類のスターティングハンドの「ランダムな1手に対する勝率」（千分率）
+// 手札2枚と残りの山札からモンテカルロで計算した値（1ハンドあたり64000回）
+const EQ169 = `
+  22505
+  33539 32s360 32o323
+  44569 43s383 43o354 42s369 42o333
+  55604 54s415 54o383 53s398 53o365 52s378 52o343
+  66631 65s431 65o401 64s412 64o379 63s395 63o363 62s377 62o339
+  77660 76s456 76o425 75s438 75o405 74s417 74o384 73s398 73o363 72s383 72o346
+  88692 87s479 87o448 86s462 86o430 85s448 85o415 84s426 84o394 83s407 83o376 82s402 82o368
+  99722 98s504 98o480 97s487 97o463 96s475 96o448 95s458 95o427 94s438 94o403 93s434 93o401 92s426 92o391
+  AA853 AKs669 AKo650 AQs662 AQo644 AJs652 AJo637 ATs648 ATo628 A9s630 A9o605 A8s616 A8o599 A7s611 A7o589 A6s599 A6o582 A5s601 A5o575 A4s590 A4o564 A3s581 A3o556 A2s572 A2o546
+  KK823 KQs638 KQo616 KJs622 KJo608 KTs619 KTo593 K9s600 K9o577 K8s582 K8o558 K7s573 K7o551 K6s564 K6o548 K5s557 K5o534 K4s547 K4o523 K3s540 K3o513 K2s535 K2o505
+  QQ798 QJs605 QJo583 QTs598 QTo574 Q9s574 Q9o552 Q8s559 Q8o538 Q7s547 Q7o517 Q6s538 Q6o511 Q5s524 Q5o501 Q4s518 Q4o493 Q3s512 Q3o481 Q2s505 Q2o473
+  JJ775 JTs572 JTo550 J9s554 J9o534 J8s538 J8o516 J7s523 J7o499 J6s505 J6o480 J5s502 J5o468 J4s492 J4o462 J3s480 J3o450 J2s474 J2o443
+  TT747 T9s540 T9o514 T8s524 T8o495 T7s506 T7o478 T6s489 T6o461 T5s470 T5o445 T4s460 T4o433 T3s458 T3o425 T2s449 T2o416
+`;
+// 同じく「上位20%の手（レイズしてくる相手の想定）に対する勝率」（千分率、1ハンドあたり40000回）
+// レイズを受けたときの判断に使う。ランダムな手が相手のときより、AKなどの高い札が相対的に強くなる
+const ER169 = `
+  AA859 AKs648 AKo630 AQs605 AQo589 AJs577 AJo558 ATs535 ATo519 A9s492 A9o466 A8s463 A8o436 A7s445 A7o412 A6s428 A6o394 A5s427 A5o397 A4s420 A4o393 A3s424 A3o387 A2s417 A2o385
+  KK745 KQs478 KQo447 KJs446 KJo417 KTs415 KTo387 K9s388 K9o355 K8s374 K8o335 K7s373 K7o334 K6s367 K6o326 K5s368 K5o327 K4s360 K4o323 K3s364 K3o319 K2s353 K2o318
+  QQ694 QJs409 QJo380 QTs390 QTo360 Q9s377 Q9o342 Q8s363 Q8o330 Q7s350 Q7o314 Q6s347 Q6o304 Q5s345 Q5o308 Q4s344 Q4o305 Q3s345 Q3o303 Q2s336 Q2o298
+  JJ644 JTs392 JTo360 J9s380 J9o349 J8s366 J8o325 J7s347 J7o313 J6s333 J6o299 J5s339 J5o298 J4s338 J4o301 J3s337 J3o297 J2s333 J2o292
+  TT611 T9s383 T9o353 T8s372 T8o339 T7s362 T7o324 T6s345 T6o307 T5s332 T5o294 T4s331 T4o297 T3s333 T3o293 T2s326 T2o291
+  99567 98s377 98o348 97s366 97o331 96s355 96o318 95s340 95o301 94s328 94o289 93s329 93o291 92s327 92o286
+  88538 87s373 87o339 86s359 86o321 85s347 85o312 84s334 84o296 83s325 83o287 82s323 82o285
+  77512 76s364 76o332 75s352 75o315 74s343 74o307 73s330 73o289 72s314 72o276
+  66488 65s362 65o328 64s344 64o312 63s330 63o302 62s325 62o284
+  55466 54s355 54o321 53s345 53o311 52s333 52o294
+  44450 43s343 43o304 42s327 42o291
+  33447 32s328 32o287
+  22438
+`;
+// 手札2枚 → "AKs" のような種類名
+function hcls(h) {
+  let a = h[0] % 13,
+    b = h[1] % 13;
+  const su = ((h[0] / 13) | 0) == ((h[1] / 13) | 0);
+  if (a < b) [a, b] = [b, a];
+  return RK[a] + RK[b] + (a == b ? "" : su ? "s" : "o");
+}
+// 旧来のプリフロップ評価式。手の並び順に問題があるため判断には使わず、
+// 値の分布（何%の手がどの値以上か）だけを PF の作成に使う
+function legacyPre(h) {
   let a = (h[0] % 13) + 2,
     b = (h[1] % 13) + 2;
   const su = ((h[0] / 13) | 0) == ((h[1] / 13) | 0);
@@ -113,6 +159,41 @@ function pre(h) {
     (su ? 0.06 : 0) +
     (g == 1 ? 0.05 : g == 2 ? 0.03 : g == 3 ? 0.01 : 0)
   );
+}
+// プリフロップの強さ表。種類名 → { pct: 上位何%か（0に近いほど強い）, s: 判断に使う値 }
+// 手の並び順は勝率表 EQ169 に従い、値の分布は legacyPre に合わせる。
+// CPUの判断式のしきい値（th, need など）は legacyPre の尺度で調整されているため、
+// こうすると各タイプの参加率をほぼ保ったまま、どの手で参加するかだけが正しくなる
+const PF = (() => {
+  const parse = (txt) => {
+    const v = {};
+    for (const t of txt.trim().split(/\s+/)) {
+      const m = t.match(/^(\w\w[so]?)(\d+)$/);
+      v[m[1]] = +m[2] / 1000;
+    }
+    return v;
+  };
+  const old = [];
+  for (let x = 0; x < 52; x++) for (let y = x + 1; y < 52; y++) old.push(legacyPre([x, y]));
+  old.sort((a, b) => b - a);
+  const out = {};
+  // 勝率表の順に並べ、上から数えた位置にある legacyPre の値を割り当てる
+  const rank = (v, f) => {
+    let acc = 0;
+    for (const k of Object.keys(v).sort((a, b) => v[b] - v[a])) {
+      const n = k.length == 2 ? 6 : k[2] == "s" ? 4 : 12;
+      f(k, (acc + n / 2) / 1326, old[Math.floor(acc + n / 2)]);
+      acc += n;
+    }
+  };
+  rank(parse(EQ169), (k, pct, s) => (out[k] = { pct, s }));
+  rank(parse(ER169), (k, pct, s) => (out[k].sr = s));
+  return out;
+})();
+// プリフロップの強さ。vr = レイズを受けているとき
+function pre(h, vr) {
+  const e = PF[hcls(h)];
+  return vr ? e.sr : e.s;
 }
 function post(p, c) {
   const B = c.board,
@@ -186,14 +267,73 @@ function ai(p, c) {
   return a >= po + 0.1 - 0.15 * l ? CL : F;
 }
 const NC = [
-  ["Croque", "#9acd32", 0.5, 0.55, 0.25],
-  ["Hubris", "#4fc3f7", 0.5, 0.5, 0.2],
-  ["Kaina", "#ff8ac8", 0.3, 0.4, 0.1],
+  // [名前, 色, ルーズさ, 攻撃性, ブラフ頻度, 読みの強さ]
+  ["Croque", "#9acd32", 0.5, 0.55, 0.25, 0.7],
+  ["Hubris", "#4fc3f7", 0.5, 0.5, 0.2, 0.7],
+  ["Kaina", "#ff8ac8", 0.3, 0.4, 0.1, 0.8],
 ];
+// ハンドの強さの段階（相手の手を絞るときに使う）
+// 3: ツーペア以上 / 2: トップペア・オーバーペア / 1: 弱いペア・ドロー / 0: 何もない
+function tier(h, B) {
+  const v = best(h.concat(B)),
+    cat = (v / 1e10) | 0,
+    hr = h.map((x) => (x % 13) + 2),
+    br = B.map((x) => (x % 13) + 2),
+    bm = Math.max(...br);
+  if (cat >= 3) return 3;
+  if (cat == 2) {
+    const hits = new Set(hr.filter((r) => br.includes(r))).size;
+    return hits == 2 ? 3 : hits == 1 || hr[0] == hr[1] ? 2 : 0;
+  }
+  if (cat == 1) {
+    const pr = ((v % 1e10) / 3375) | 0;
+    if (hr[0] == hr[1]) return pr > bm ? 2 : 1;
+    if (hr.includes(pr)) return pr == bm ? 2 : 1;
+  }
+  if (B.length < 5) {
+    // フラッシュドロー
+    for (let u = 0; u < 4; u++)
+      if (
+        h.concat(B).filter((x) => ((x / 13) | 0) == u).length == 4 &&
+        h.some((x) => ((x / 13) | 0) == u)
+      )
+        return 1;
+    // ストレートドロー（連続する5ランクのうち4つがあり、手札が絡んでいる）
+    const bits = (a) => a.reduce((m, x) => m | (1 << ((x % 13) + 2)) | (x % 13 == 12 ? 2 : 0), 0),
+      all = bits(h.concat(B)),
+      hb = bits(h);
+    for (let lo = 1; lo <= 10; lo++) {
+      const w = 31 << lo;
+      let n = 0;
+      for (let x = all & w; x; x &= x - 1) n++;
+      if (n >= 4 && hb & w) return 1;
+    }
+  }
+  return 0;
+}
+// 相手 q が手札 h を持っている「ありそうさ」（0〜1）。q のこのハンドでのアクションから判断する
+// 段階ごとの受け入れ率 [何もない, 弱い, 中くらい, 強い]
+const FIT = { bet: [0.35, 0.7, 1, 1], big: [0.2, 0.4, 0.8, 1], raise: [0.12, 0.25, 0.5, 1] };
+function fit(q, h, B) {
+  const pc = PF[hcls(h)].pct,
+    cut = q.p3 ? 0.08 : q.pfr ? 0.3 : q.pc ? 0.55 : 1;
+  let w = pc > cut ? 0.1 : 1;
+  for (const L of [3, 4, 5]) {
+    const g = q.ag[L];
+    if (!g || B.length < L) continue;
+    w *= FIT[g.r ? "raise" : g.z >= 0.6 ? "big" : "bet"][tier(h, B.slice(0, L))];
+  }
+  return w;
+}
+// 勝率の見積もり。相手の手札は、いちばん攻めてきている相手のアクションに合うように引く
+// p.rd（読みの強さ 0〜1）が大きいほど、相手のアクションを信じて手を絞る。0 ならランダムな手
 function eq(p, c) {
   const B = c.board,
     base = p.h.concat(B),
-    N = B.length == 5 ? 26 : 20;
+    N = B.length == 5 ? 26 : 20,
+    rd = p.rd ?? 0,
+    agg = (q) => q.p3 * 2 + q.pfr + Object.keys(q.ag).length * 2 + (q.ag[B.length] ? 3 : 0),
+    opp = c.ps.filter((q) => q != p && !q.fold).sort((x, y) => agg(y) - agg(x))[0];
   let w = 0;
   for (let i = 0; i < N; i++) {
     const s = new Set(base),
@@ -203,9 +343,15 @@ function eq(p, c) {
         while (s.has(x));
         s.add(x);
         return x;
-      },
-      o = [ru(), ru()],
-      bb = B.slice();
+      };
+    let o;
+    for (let t = 0; t < 12; t++) {
+      o = [ru(), ru()];
+      if (!opp || !rd || R() < 1 - rd * (1 - fit(opp, o, B))) break;
+      s.delete(o[0]);
+      s.delete(o[1]);
+    }
+    const bb = B.slice();
     while (bb.length < 5) bb.push(ru());
     const a = best(p.h.concat(bb)),
       b = best(o.concat(bb));
@@ -241,7 +387,7 @@ function ai2(p, c) {
     l += 0.3;
     ag += 0.2;
   }
-  const s = (L ? eq(p, c) : pre(p.h)) + (R() - 0.5) * (k ? 0.02 : 0.1),
+  const s = (L ? eq(p, c) : pre(p.h, c.cur > bb)) + (R() - 0.5) * (k ? 0.02 : 0.1),
     po = c.toCall / (c.pot + c.toCall || 1),
     RR = (x) => ({ t: "r", x: Math.round(x) }),
     CL = { t: "c" },
@@ -332,6 +478,9 @@ function* hand(T) {
     p.allin = 0;
     p.acted = 0;
     p.pfr = 0;
+    p.p3 = 0; // プリフロップで2回目以降のレイズ（3ベット以上）をした
+    p.pc = 0; // プリフロップで自分からコールした
+    p.ag = {}; // フロップ以降のベット・レイズ { ボード枚数: { z: ポットに対する額, r: レイズか } }
   });
   const A = T.p.filter((p) => p.stack > 0),
     n = A.length;
@@ -407,7 +556,14 @@ function* hand(T) {
         let X = Math.min(Math.round(x), mx);
         if (X < cur + minR && X < mx) X = Math.min(cur + minR, mx);
         const old = cur;
-        if (!bd.length) p.pfr = 1;
+        if (!bd.length) {
+          if (old > bb) p.p3 = 1;
+          p.pfr = 1;
+        } else {
+          const z = (X - p.bet) / (c.pot || 1),
+            g = p.ag[bd.length];
+          p.ag[bd.length] = { z: Math.max(z, g ? g.z : 0), r: (g && g.r) || old > 0 };
+        }
         put(p, X - p.bet);
         if (p.bet - old >= minR) minR = p.bet - old;
         cur = p.bet;
@@ -419,6 +575,7 @@ function* hand(T) {
         );
       } else {
         const k = Math.min(c.toCall, p.stack);
+        if (!bd.length && k) p.pc = 1;
         put(p, k);
         lg(p.name + (k ? ` コール ${fb(k)}BB` : " チェック") + (p.allin ? " (オールイン)" : ""));
       }
@@ -692,6 +849,7 @@ function begin() {
             l: NC[i - 1][2],
             a: NC[i - 1][3],
             b: NC[i - 1][4],
+            rd: NC[i - 1][5],
             stack: 1e4,
             re: 0,
             alive: 1,
@@ -705,6 +863,7 @@ function begin() {
               a: t[2] + (R() - 0.5) * 0.1,
               b: t[3],
               icm: t[4],
+              rd: t[5],
               stack: 1e4,
               re: 0,
               alive: 1,

@@ -20,6 +20,8 @@ index.html                          画面の骨組み（ここをブラウザ�
 style.css                           見た目（色・レイアウト）
 game.js                             ゲームの処理（役判定・CPUの思考・トーナメント進行）
 .prettierrc                         コード整形ツール Prettier の設定
+tools/sim.js                        CPUの強さを測るシミュレーター（開発用）
+tools/eqtable.js                    game.js の勝率表を作り直すツール（開発用）
 README.md                           このファイル
 CLAUDE.md                           Claudeに作業してもらうときのルール
 .github/pull_request_template.md    PRを作るときの記入テンプレート
