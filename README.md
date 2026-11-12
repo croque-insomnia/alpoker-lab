@@ -16,15 +16,20 @@
 
 ## ファイル構成
 ```
-index.html                          ゲーム本体（HTML・CSS・JavaScriptがすべてこの1ファイル）
+index.html                          画面の骨組み（ここをブラウザで開く）
+style.css                           見た目（色・レイアウト）
+game.js                             ゲームの処理（役判定・CPUの思考・トーナメント進行）
+.prettierrc                         コード整形ツール Prettier の設定
 README.md                           このファイル
 CLAUDE.md                           Claudeに作業してもらうときのルール
 .github/pull_request_template.md    PRを作るときの記入テンプレート
 ```
 
 ## 開発の進め方
-1. `main` に直接アップロード・編集はしない
-2. ブランチを作って変更し、PR（プルリクエスト）を出す
+1. 編集は Claude Code（claude.ai/code）で、このリポジトリを選んで頼む
+2. Claude がブランチを作って変更し、PR（プルリクエスト）を出す
 3. もう一人が中身を見て、問題なければマージする
+
+`main` に直接アップロード・編集はしません。
 
 細かいルールは [CLAUDE.md](CLAUDE.md) にまとめています。
