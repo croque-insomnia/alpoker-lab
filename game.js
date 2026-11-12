@@ -272,6 +272,27 @@ const NC = [
   ["Hubris", "#4fc3f7", 0.5, 0.5, 0.2, 0.7],
   ["Kaina", "#ff8ac8", 0.3, 0.4, 0.1, 0.8],
 ];
+// ドローがあるか（フラッシュドロー、またはストレートドロー）。手札が絡んでいるものだけ
+function draw(h, B) {
+  // フラッシュドロー
+  for (let u = 0; u < 4; u++)
+    if (
+      h.concat(B).filter((x) => ((x / 13) | 0) == u).length == 4 &&
+      h.some((x) => ((x / 13) | 0) == u)
+    )
+      return 1;
+  // ストレートドロー（連続する5ランクのうち4つがあり、手札が絡んでいる）
+  const bits = (a) => a.reduce((m, x) => m | (1 << ((x % 13) + 2)) | (x % 13 == 12 ? 2 : 0), 0),
+    all = bits(h.concat(B)),
+    hb = bits(h);
+  for (let lo = 1; lo <= 10; lo++) {
+    const w = 31 << lo;
+    let n = 0;
+    for (let x = all & w; x; x &= x - 1) n++;
+    if (n >= 4 && hb & w) return 1;
+  }
+  return 0;
+}
 // ハンドの強さの段階（相手の手を絞るときに使う）
 // 3: ツーペア以上 / 2: トップペア・オーバーペア / 1: 弱いペア・ドロー / 0: 何もない
 function tier(h, B) {
@@ -290,30 +311,19 @@ function tier(h, B) {
     if (hr[0] == hr[1]) return pr > bm ? 2 : 1;
     if (hr.includes(pr)) return pr == bm ? 2 : 1;
   }
-  if (B.length < 5) {
-    // フラッシュドロー
-    for (let u = 0; u < 4; u++)
-      if (
-        h.concat(B).filter((x) => ((x / 13) | 0) == u).length == 4 &&
-        h.some((x) => ((x / 13) | 0) == u)
-      )
-        return 1;
-    // ストレートドロー（連続する5ランクのうち4つがあり、手札が絡んでいる）
-    const bits = (a) => a.reduce((m, x) => m | (1 << ((x % 13) + 2)) | (x % 13 == 12 ? 2 : 0), 0),
-      all = bits(h.concat(B)),
-      hb = bits(h);
-    for (let lo = 1; lo <= 10; lo++) {
-      const w = 31 << lo;
-      let n = 0;
-      for (let x = all & w; x; x &= x - 1) n++;
-      if (n >= 4 && hb & w) return 1;
-    }
-  }
+  if (B.length < 5 && draw(h, B)) return 1;
   return 0;
 }
 // 相手 q が手札 h を持っている「ありそうさ」（0〜1）。q のこのハンドでのアクションから判断する
 // 段階ごとの受け入れ率 [何もない, 弱い, 中くらい, 強い]
 const FIT = { bet: [0.35, 0.7, 1, 1], big: [0.2, 0.4, 0.8, 1], raise: [0.12, 0.25, 0.5, 1] };
+// 相手の傾向：チェックで回ってきたときにベットする割合（ハンドをまたいで記録している）
+// FIT はこの割合が BTC0 の相手を想定した値。記録が少ないうちは BTC0 に寄せる
+const BTC0 = 0.4;
+function btc(q) {
+  const t = q.st || { cto: 0, bct: 0 };
+  return (t.bct + BTC0 * 10) / (t.cto + 10);
+}
 function fit(q, h, B) {
   const pc = PF[hcls(h)].pct,
     cut = q.p3 ? 0.08 : q.pfr ? 0.3 : q.pc ? 0.55 : 1;
@@ -321,7 +331,16 @@ function fit(q, h, B) {
   for (const L of [3, 4, 5]) {
     const g = q.ag[L];
     if (!g || B.length < L) continue;
-    w *= FIT[g.r ? "raise" : g.z >= 0.6 ? "big" : "bet"][tier(h, B.slice(0, L))];
+    const t = tier(h, B.slice(0, L));
+    let f = FIT[g.r ? "raise" : g.z >= 0.6 ? "big" : "bet"][t];
+    // ベット（レイズ以外）は相手の傾向で補正する
+    // よく打つ相手ほどベットに意味がない（弱い手もありうる）、めったに打たない相手のベットは強い
+    if (!g.r) {
+      const b = btc(q);
+      if (b > BTC0) f += ((1 - f) * (b - BTC0)) / (1 - BTC0);
+      else if (t < 2) f *= b / BTC0;
+    }
+    w *= f;
   }
   return w;
 }
@@ -454,6 +473,16 @@ function ai2(p, c) {
   const need =
     po + 0.03 - 0.1 * l + (k == "Kaina" ? 0.08 : 0) + (k == "Croque" && !ft && po > 0.4 ? 0.12 : 0);
   if (k == "Croque" && !ft && c.toCall >= st * 0.5 && a < 0.82 && M > 5) return F;
+  // チェックレイズ：このストリートでチェックしたあとにベットされたとき
+  // 強い手で反撃するほか、ドローでセミブラフする（Kaina は従来どおりブラフ系のレイズをしない）
+  if (p.ck == L && !p.bet && c.toCall < st) {
+    const raise = RR(c.cur * (2.5 + R() * 0.5));
+    if (a >= 0.7 && R() < 0.25 + 0.4 * ag) return raise;
+    // セミブラフはフロップだけ。よく打ってくる相手ほど増やし、めったに打たない相手には控える
+    const bettor = c.ps.find((q) => q != p && !q.fold && q.bet == c.cur),
+      m = bettor ? Math.min(2.5, Math.max(0.3, btc(bettor) / BTC0)) : 1;
+    if (L == 3 && k != "Kaina" && draw(p.h, B) && R() < (p.b * 0.5 + ag * 0.15) * m) return raise;
+  }
   if (
     a >= 0.88 ||
     (a >= 0.7 && R() < ag * 0.35) ||
@@ -481,6 +510,7 @@ function* hand(T) {
     p.p3 = 0; // プリフロップで2回目以降のレイズ（3ベット以上）をした
     p.pc = 0; // プリフロップで自分からコールした
     p.ag = {}; // フロップ以降のベット・レイズ { ボード枚数: { z: ポットに対する額, r: レイズか } }
+    p.ck = 0; // 最後にチェックしたストリート（ボード枚数）
   });
   const A = T.p.filter((p) => p.stack > 0),
     n = A.length;
@@ -545,7 +575,14 @@ function* hand(T) {
         an,
         sb,
       };
+      // チェックで回ってきたか（このストリートで誰かがチェックしたあと、まだ誰も打っていない）
+      const cto = bd.length && !c.toCall && ps.some((q) => q != p && !q.fold && q.acted);
       const a = p.hero ? yield { k: "hero", p, c } : ai2(p, c);
+      if (cto) {
+        p.st ??= { cto: 0, bct: 0 }; // 相手の傾向の記録（ハンドをまたいで残す）
+        p.st.cto++;
+        if (a.t == "r") p.st.bct++;
+      }
       let x = a.x;
       if (!p.hero && a.t == "r" && x >= (p.bet + p.stack) * 0.55) x = p.bet + p.stack;
       if (a.t == "f" && c.toCall > 0) {
@@ -576,6 +613,7 @@ function* hand(T) {
       } else {
         const k = Math.min(c.toCall, p.stack);
         if (!bd.length && k) p.pc = 1;
+        if (bd.length && !k) p.ck = bd.length;
         put(p, k);
         lg(p.name + (k ? ` コール ${fb(k)}BB` : " チェック") + (p.allin ? " (オールイン)" : ""));
       }
