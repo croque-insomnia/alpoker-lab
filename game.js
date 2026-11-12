@@ -329,17 +329,46 @@ function tier(h, B) {
 // 相手 q が手札 h を持っている「ありそうさ」（0〜1）。q のこのハンドでのアクションから判断する
 // 段階ごとの受け入れ率 [何もない, 弱い, 中くらい, 強い]
 const FIT = { bet: [0.35, 0.7, 1, 1], big: [0.2, 0.4, 0.8, 1], raise: [0.12, 0.25, 0.5, 1] };
-// 相手の傾向：チェックで回ってきたときにベットする割合（ハンドをまたいで記録している）
-// FIT はこの割合が BTC0 の相手を想定した値。記録が少ないうちは BTC0 に寄せる
-const BTC0 = 0.4;
-function btc(q) {
-  const t = q.st || { cto: 0, bct: 0 };
-  return (t.bct + BTC0 * 10) / (t.cto + 10);
+// ---- 観察の記録（記憶）----
+// 各CPUは、同じ卓で見えたことだけを相手ごとに記録する（p.mem: 相手の oid → 記録）
+//   n: 一緒に配られたハンド数 / vp: 自分から参加した / pr: プリフロップでレイズした
+//   cto・bct: チェックで回ってきた回数・そこでベットした回数
+//   sb・sw: ショーダウンで手が見えたベット・レイズの数・そのうち弱い手（段階0〜1）だった数
+const newObs = () => ({ n: 0, vp: 0, pr: 0, cto: 0, bct: 0, sb: 0, sw: 0 });
+function obs(p, q) {
+  p.mem ??= new Map();
+  let o = p.mem.get(q.oid);
+  if (!o) p.mem.set(q.oid, (o = newObs()));
+  return o;
 }
-function fit(q, h, B) {
-  const pc = PF[hcls(h)].pct,
-    cut = q.p3 ? 0.08 : q.pfr ? 0.3 : q.pc ? 0.55 : 1;
-  let w = pc > cut ? 0.1 : 1;
+// 記録から割合を出す。記録が少ないうちは標準値 v0 に寄せる（k 回分の重み）
+const rate = (x, n, v0, k) => (x + v0 * k) / (n + k);
+// FIT は「チェックで回ってきたときにベットする割合」が BTC0 の相手を想定した値
+const BTC0 = 0.4;
+// ショーダウンで見えたベットのうち、弱い手だった割合の標準値。
+// ブラフで降ろした手は見えないため、見えた割合は SDW_UP 倍して使う
+const SDW0 = 0.25,
+  SDW_UP = 1.3;
+function btc(p, q) {
+  const o = obs(p, q);
+  return rate(o.bct, o.cto, BTC0, 10);
+}
+// 観察した参加率から見積もった、相手のルーズさ（0〜1。CPUタイプの「ルーズさ」とほぼ同じ尺度）
+function loose(p, q) {
+  const o = obs(p, q);
+  return Math.min(1, Math.max(0, (rate(o.vp, o.n, 0.3, 10) - 0.08) * 2.4));
+}
+// 相手 q が手札 h を持っている「ありそうさ」（0〜1）
+// 観察者 p の記憶と、q のこのハンドでのアクションから判断する
+function fit(p, q, h, B) {
+  const o = obs(p, q),
+    // 観察したレイズ率・参加率から、レイズ・コールしてくる範囲（上位何%の手か）を見積もる
+    cutR = Math.min(0.6, Math.max(0.12, rate(o.pr, o.n, 0.2, 10) * 1.5)),
+    cutC = Math.min(0.9, Math.max(0.25, rate(o.vp, o.n, 0.3, 10) * 1.8)),
+    cut = q.p3 ? 0.08 : q.pfr ? cutR : q.pc ? cutC : 1,
+    // ショーダウンで弱い手のベットをよく見せている相手ほど、ベットに弱い手が混ざっていると見る
+    bf = Math.min(3, Math.max(0.3, Math.min(1, rate(o.sw * SDW_UP, o.sb, SDW0, 6)) / SDW0));
+  let w = PF[hcls(h)].pct > cut ? 0.1 : 1;
   for (const L of [3, 4, 5]) {
     const g = q.ag[L];
     if (!g || B.length < L) continue;
@@ -348,10 +377,11 @@ function fit(q, h, B) {
     // ベット（レイズ以外）は相手の傾向で補正する
     // よく打つ相手ほどベットに意味がない（弱い手もありうる）、めったに打たない相手のベットは強い
     if (!g.r) {
-      const b = btc(q);
+      const b = btc(p, q);
       if (b > BTC0) f += ((1 - f) * (b - BTC0)) / (1 - BTC0);
       else if (t < 2) f *= b / BTC0;
     }
+    if (t < 2) f = Math.min(1, f * bf);
     w *= f;
   }
   return w;
@@ -378,7 +408,7 @@ function eq(p, c) {
     let o;
     for (let t = 0; t < 12; t++) {
       o = [ru(), ru()];
-      if (!opp || !rd || R() < 1 - rd * (1 - fit(opp, o, B))) break;
+      if (!opp || !rd || R() < 1 - rd * (1 - fit(p, opp, o, B))) break;
       s.delete(o[0]);
       s.delete(o[1]);
     }
@@ -440,7 +470,7 @@ function ai2(p, c) {
     if (k == "Croque" && open && (late || c.pos == 1)) {
       const tl =
         1 -
-        c.ps.filter((q) => q != p && !q.fold).reduce((x, q) => x + (q.l ?? 0.5), 0) /
+        c.ps.filter((q) => q != p && !q.fold).reduce((x, q) => x + loose(p, q), 0) /
           Math.max(1, c.L - 1);
       th -= 0.16 * tl + 0.05;
     }
@@ -492,7 +522,7 @@ function ai2(p, c) {
     if (a >= 0.7 && R() < 0.25 + 0.4 * ag) return raise;
     // セミブラフはフロップだけ。よく打ってくる相手ほど増やし、めったに打たない相手には控える
     const bettor = c.ps.find((q) => q != p && !q.fold && q.bet == c.cur),
-      m = bettor ? Math.min(2.5, Math.max(0.3, btc(bettor) / BTC0)) : 1;
+      m = bettor ? Math.min(2.5, Math.max(0.3, btc(p, bettor) / BTC0)) : 1;
     if (L == 3 && k != "Kaina" && draw(p.h, B) && R() < (p.b * 0.5 + ag * 0.15) * m) return raise;
   }
   if (
@@ -557,6 +587,9 @@ function* hand(T) {
   let cur = Math.max(s0.bet, b0.bet),
     minR = bb;
   const live = () => ps.filter((p) => !p.fold);
+  // q の行動を、同じ卓の他の人（あなた以外）が記録する
+  const watch = (q, f) => ps.forEach((o) => o != q && !o.hero && f(obs(o, q)));
+  ps.forEach((q) => watch(q, (o) => o.n++));
   // これ以上ベットが起きない（残りが全員オールイン、または1人以外オールイン）なら、手札を表にする
   let shown = 0;
   const reveal = () => {
@@ -599,11 +632,11 @@ function* hand(T) {
       // チェックで回ってきたか（このストリートで誰かがチェックしたあと、まだ誰も打っていない）
       const cto = bd.length && !c.toCall && ps.some((q) => q != p && !q.fold && q.acted);
       const a = p.hero ? yield { k: "hero", p, c } : ai2(p, c);
-      if (cto) {
-        p.st ??= { cto: 0, bct: 0 }; // 相手の傾向の記録（ハンドをまたいで残す）
-        p.st.cto++;
-        if (a.t == "r") p.st.bct++;
-      }
+      if (cto)
+        watch(p, (o) => {
+          o.cto++;
+          if (a.t == "r") o.bct++;
+        });
       let x = a.x;
       if (!p.hero && a.t == "r" && x >= (p.bet + p.stack) * 0.55) x = p.bet + p.stack;
       if (a.t == "f" && c.toCall > 0) {
@@ -644,6 +677,14 @@ function* hand(T) {
   }
   yield* rnd(n == 2 ? 0 : 3 % n);
   reveal();
+  ps.forEach(
+    (q) =>
+      (q.pc || q.pfr) &&
+      watch(q, (o) => {
+        o.vp++;
+        if (q.pfr) o.pr++;
+      }),
+  );
   for (const k of [3, 1, 1]) {
     if (live().length < 2) break;
     for (let j = 0; j < k; j++) bd.push(d.pop());
@@ -664,6 +705,15 @@ function* hand(T) {
       p.v = best(p.h.concat(bd));
       p.show = 1;
       lg(`${p.name}：${p.h.map((c) => cd(c)).join("")}（${HN[(p.v / 1e10) | 0]}）`);
+      // ベット・レイズしたストリートで実際に弱い手だったかを、見ていた人が記録する
+      for (const st of [3, 4, 5])
+        if (p.ag[st]) {
+          const weak = tier(p.h, bd.slice(0, st)) < 2;
+          watch(p, (o) => {
+            o.sb++;
+            if (weak) o.sw++;
+          });
+        }
     });
   let prev = 0;
   for (const m of [...new Set(L.map((p) => p.tot))].sort((a, b) => a - b)) {
@@ -742,6 +792,7 @@ function end() {
   const T = G.T,
     h = G.hero;
   bust(T);
+  saveMem();
   G.wait = 1;
   render();
   if (h.stack <= 0) {
@@ -788,6 +839,7 @@ function reent() {
 }
 function fin() {
   const h = G.hero;
+  saveMem();
   h.alive = 0;
   G.ask = 0;
   const pl = alive() + 1,
@@ -819,7 +871,7 @@ function render() {
     tmr();
   }
   const seat = (p) =>
-    `<div class="s${p.fold ? " f" : ""}${G.req && G.req.p == p ? " a" : ""}${p.hero ? " h" : ""}"><b style="color:${p.col || "inherit"}">${p.name}</b> <small>${p.hero || !G.ty ? "" : p.ty[0]} ${p.lab || ""}${p.alive ? "" : " バスト"}</small><div>${fb(p.stack)} BB</div><div>${p.h ? p.h.map((c) => cd(c, !p.hero && !p.show)).join("") : "&nbsp;"}</div><em>${p.bet ? "bet " + fb(p.bet) : ""}</em></div>`;
+    `<div class="s${p.fold ? " f" : ""}${G.req && G.req.p == p ? " a" : ""}${p.hero ? " h" : ""}"><b style="color:${p.col || "inherit"}">${p.name}</b> <small>${p.hero || !G.ty ? "" : p.ty[0]}${p.k && G.ty ? ` 記憶${Math.round(p.mem?.get("hero")?.n || 0)}H` : ""} ${p.lab || ""}${p.alive ? "" : " バスト"}</small><div>${fb(p.stack)} BB</div><div>${p.h ? p.h.map((c) => cd(c, !p.hero && !p.show)).join("") : "&nbsp;"}</div><em>${p.bet ? "bet " + fb(p.bet) : ""}</em></div>`;
   const pot = (T.ps || []).reduce((s, p) => s + p.tot, 0);
   $("tb").innerHTML = `<div class=row>${T.p
     .concat(T.gone || [])
@@ -897,6 +949,34 @@ function tmr() {
   }
 }
 setInterval(tmr, 500);
+// ネームドCPUの記憶はブラウザに保存し、大会をまたいで持ち越す
+// 持ち越すのは、あなたとネームドCPU同士についての記録だけ（他のCPUは大会ごとに別人のため）
+// 大会の始めに MEM_DECAY 倍に縮めるので、打ち方を変えれば何大会かで追いつく
+const MEMK = "mtt5mem",
+  MEM_DECAY = 0.7,
+  KEEP = ["hero", ...NC.map((n) => n[0])];
+function loadMem(p) {
+  p.mem = new Map();
+  try {
+    const all = JSON.parse(localStorage.getItem(MEMK) || "{}")[p.oid] || {};
+    for (const [k, o] of Object.entries(all)) {
+      const d = newObs();
+      for (const f in d) d[f] = (o[f] || 0) * MEM_DECAY;
+      p.mem.set(k, d);
+    }
+  } catch (e) {}
+}
+function saveMem() {
+  const all = {};
+  for (const p of G.P)
+    if (p.k && p.mem) {
+      all[p.oid] = {};
+      for (const k of KEEP) if (p.mem.has(k)) all[p.oid][k] = p.mem.get(k);
+    }
+  try {
+    localStorage.setItem(MEMK, JSON.stringify(all));
+  } catch (e) {}
+}
 function begin() {
   G = { dur: +$("spd").value * 6e4, lv: 0, entries: 40, lg: [], ty: ls() };
   $("tyc").checked = G.ty;
@@ -911,6 +991,7 @@ function begin() {
             id: i,
             name: NC[i - 1][0],
             k: NC[i - 1][0],
+            oid: NC[i - 1][0],
             col: NC[i - 1][1],
             ty: ["ネームド"],
             l: NC[i - 1][2],
@@ -925,6 +1006,7 @@ function begin() {
           ? {
               id: i,
               name: nm[i - 1],
+              oid: "c" + i,
               ty: t,
               l: t[1] + (R() - 0.5) * 0.1,
               a: t[2] + (R() - 0.5) * 0.1,
@@ -935,9 +1017,10 @@ function begin() {
               re: 0,
               alive: 1,
             }
-          : { id: 0, name: "あなた", hero: 1, ty: ["—"], stack: 1e4, re: 0, alive: 1 },
+          : { id: 0, oid: "hero", name: "あなた", hero: 1, ty: ["—"], stack: 1e4, re: 0, alive: 1 },
     );
   }
+  G.P.filter((p) => p.k).forEach(loadMem);
   const sh = shf([...G.P]);
   G.tables = [];
   for (let i = 0; i < 8; i++) G.tables.push({ p: sh.slice(i * 5, i * 5 + 5), btn: -1 });
