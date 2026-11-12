@@ -77,7 +77,21 @@ function bot(p, c) {
 const orig = globalThis.ai2,
   ST = {},
   st = (k) =>
-    (ST[k] ??= { hands: 0, vpip: 0, pfr: 0, f3: 0, b3: 0, agg: 0, call: 0, fb: 0, fbF: 0, net: 0 });
+    (ST[k] ??= {
+      hands: 0,
+      vpip: 0,
+      pfr: 0,
+      f3: 0,
+      b3: 0,
+      agg: 0,
+      call: 0,
+      fb: 0,
+      fbF: 0,
+      cb: 0,
+      cbF: 0,
+      cbR: 0,
+      net: 0,
+    });
 let seen = null;
 globalThis.ai2 = function (p, c) {
   const a = p.bot ? bot(p, c) : orig(p, c),
@@ -92,6 +106,15 @@ globalThis.ai2 = function (p, c) {
     if (a.t == "r") S.agg++;
     else if (a.t == "c" && c.toCall > 0) S.call++;
     if (c.toCall > 0) S.fb++, a.t == "f" && S.fbF++;
+    // チェックしたあとに同じストリートでベットされたときの反応
+    const L = c.board.length;
+    if (c.toCall == 0 && a.t == "c") (hs.ck ??= {})[L] = 1;
+    else if (c.toCall > 0 && hs.ck?.[L] && !hs.ckDone?.[L]) {
+      (hs.ckDone ??= {})[L] = 1;
+      S.cb++;
+      if (a.t == "f") S.cbF++;
+      if (a.t == "r") S.cbR++;
+    }
   }
   return a;
 };
@@ -134,7 +157,9 @@ for (let h = 0; h < HANDS; h++) {
 const pc = (x) => (x * 100).toFixed(0).padStart(4) + "%",
   bb100 = (S) => ((S.net / S.hands) * 100).toFixed(1).padStart(7);
 if (mode == "cpu") {
-  console.log("タイプ          VPIP   PFR  3bet    AF  被ベット時フォールド  BB/100");
+  console.log(
+    "タイプ          VPIP   PFR  3bet    AF  被ベット時F  チェック後F  チェックレイズ  BB/100",
+  );
   for (const k of KINDS) {
     const S = ST[k];
     if (!S) continue;
@@ -144,8 +169,23 @@ if (mode == "cpu") {
       pc(S.pfr / S.hands),
       pc(S.b3 / Math.max(1, S.f3)),
       (S.agg / Math.max(1, S.call)).toFixed(2).padStart(5),
-      "         " + pc(S.fbF / Math.max(1, S.fb)),
-      "       " + bb100(S),
+      "    " + pc(S.fbF / Math.max(1, S.fb)),
+      "     " + pc(S.cbF / Math.max(1, S.cb)),
+      "        " + pc(S.cbR / Math.max(1, S.cb)),
+      "   " + bb100(S),
     );
   }
-} else console.log(`${mode} bot: ${bb100(ST[mode])} BB/100（${ST[mode].hands}ハンド）`);
+} else {
+  // CPU全体の、チェック後にベットされたときの反応
+  const C = Object.entries(ST)
+    .filter(([k]) => k != mode)
+    .reduce((x, [, S]) => ((x.cb += S.cb), (x.cbF += S.cbF), (x.cbR += S.cbR), x), {
+      cb: 0,
+      cbF: 0,
+      cbR: 0,
+    });
+  console.log(
+    `${mode} bot: ${bb100(ST[mode])} BB/100（${ST[mode].hands}ハンド）`,
+    `／CPUのチェック後フォールド ${pc(C.cbF / Math.max(1, C.cb))}・チェックレイズ ${pc(C.cbR / Math.max(1, C.cb))}`,
+  );
+}
