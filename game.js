@@ -444,7 +444,21 @@ const FIT = { bet: [0.35, 0.7, 1, 1], big: [0.2, 0.4, 0.8, 1], raise: [0.12, 0.2
 //   n: 一緒に配られたハンド数 / vp: 自分から参加した / pr: プリフロップでレイズした
 //   cto・bct: チェックで回ってきた回数・そこでベットした回数
 //   sb・sw: ショーダウンで手が見えたベット・レイズの数・そのうち弱い手（段階0〜1）だった数
-const newObs = () => ({ n: 0, vp: 0, pr: 0, cto: 0, bct: 0, sb: 0, sw: 0 });
+//   sbL・swL / sbS・swS: 上のうちレイズ以外のベットを、額の大小（BIGZ 以上か）で分けたもの
+//     （ベット額に癖がある相手、たとえば「ブラフで大きく打つ」相手を見抜くため）
+const newObs = () => ({
+  n: 0,
+  vp: 0,
+  pr: 0,
+  cto: 0,
+  bct: 0,
+  sb: 0,
+  sw: 0,
+  sbL: 0,
+  swL: 0,
+  sbS: 0,
+  swS: 0,
+});
 function obs(p, q) {
   p.mem ??= new Map();
   let o = p.mem.get(q.oid);
@@ -458,7 +472,9 @@ const BTC0 = 0.4;
 // ショーダウンで見えたベットのうち、弱い手だった割合の標準値。
 // ブラフで降ろした手は見えないため、見えた割合は SDW_UP 倍して使う
 const SDW0 = 0.25,
-  SDW_UP = 1.3;
+  SDW_UP = 1.3,
+  // 「大きいベット」とみなす額（ポットに対する倍率）
+  BIGZ = 0.75;
 function btc(p, q) {
   const o = obs(p, q);
   return rate(o.bct, o.cto, BTC0, 10);
@@ -477,7 +493,9 @@ function fit(p, q, h, B) {
     cutC = Math.min(0.9, Math.max(0.25, rate(o.vp, o.n, 0.3, 10) * 1.8)),
     cut = q.p3 ? 0.08 : q.pfr ? cutR : q.pc ? cutC : 1,
     // ショーダウンで弱い手のベットをよく見せている相手ほど、ベットに弱い手が混ざっていると見る
-    bf = Math.min(3, Math.max(0.3, Math.min(1, rate(o.sw * SDW_UP, o.sb, SDW0, 6)) / SDW0));
+    // r0: 全体の弱い手の割合 / bfOf: 割合から受け入れ率にかける倍率を出す
+    r0 = Math.min(1, rate(o.sw * SDW_UP, o.sb, SDW0, 6)),
+    bfOf = (r) => Math.min(3, Math.max(0.3, r / SDW0));
   let w = PF[hcls(h)].pct > cut ? 0.1 : 1;
   for (const L of [3, 4, 5]) {
     const g = q.ag[L];
@@ -491,7 +509,14 @@ function fit(p, q, h, B) {
       if (b > BTC0) f += ((1 - f) * (b - BTC0)) / (1 - BTC0);
       else if (t < 2) f *= b / BTC0;
     }
-    if (t < 2) f = Math.min(1, f * bf);
+    // ベットは額の大小ごとの記録を使う（記録が少ないうちは全体の割合 r0 に寄せる）。レイズは全体の記録
+    if (t < 2) {
+      const big = g.z >= BIGZ,
+        r = g.r
+          ? r0
+          : Math.min(1, rate((big ? o.swL : o.swS) * SDW_UP, big ? o.sbL : o.sbS, r0, 4));
+      f = Math.min(1, f * bfOf(r));
+    }
     w *= f;
   }
   return w;
@@ -854,10 +879,20 @@ function* hand(T) {
       // ベット・レイズしたストリートで実際に弱い手だったかを、見ていた人が記録する
       for (const st of [3, 4, 5])
         if (p.ag[st]) {
-          const weak = tier(p.h, bd.slice(0, st)) < 2;
+          const weak = tier(p.h, bd.slice(0, st)) < 2,
+            g = p.ag[st],
+            big = g.z >= BIGZ;
           watch(p, (o) => {
             o.sb++;
             if (weak) o.sw++;
+            if (g.r) return;
+            if (big) {
+              o.sbL++;
+              if (weak) o.swL++;
+            } else {
+              o.sbS++;
+              if (weak) o.swS++;
+            }
           });
         }
     });
