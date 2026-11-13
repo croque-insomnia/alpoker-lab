@@ -126,22 +126,21 @@ globalThis.ai2 = function (p, c) {
   return a;
 };
 
-const KINDS = [...TY.map((t) => t[0]), ...NC.map((n) => n[0])];
+const KINDS = [...TY.map((t) => t.name), ...NC.map((n) => n.name)];
 function mk(id, kind) {
   const base = { id, oid: kind + ":" + id, name: kind, kind, stack: 1e4, re: 0, alive: 1 };
   if (kind == "value" || kind == "bluff")
     return { ...base, bot: kind, ty: [kind], l: 0.5, a: 0.5, b: 0 };
-  const n = NC.find((n) => n[0] == kind);
-  if (n) return { ...base, k: n[0], ty: ["ネームド"], l: n[2], a: n[3], b: n[4], rd: n[5] };
-  const t = TY.find((t) => t[0] == kind);
+  const n = NC.find((n) => n.name == kind);
+  if (n) return { ...CPU0, ...n, ...base, k: n.name, ty: ["ネームド"] };
+  const t = TY.find((t) => t.name == kind);
   return {
+    ...CPU0,
+    ...t,
     ...base,
-    ty: t,
-    l: t[1] + (Math.random() - 0.5) * 0.1,
-    a: t[2] + (Math.random() - 0.5) * 0.1,
-    b: t[3],
-    icm: t[4],
-    rd: t[5],
+    ty: [t.name],
+    l: t.l + (Math.random() - 0.5) * 0.1,
+    a: t.a + (Math.random() - 0.5) * 0.1,
   };
 }
 

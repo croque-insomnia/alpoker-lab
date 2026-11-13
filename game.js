@@ -17,15 +17,22 @@ const LV = [
   [6500, 13000, 3200],
   [9800, 19600, 4900],
 ];
-// CPUタイプ: [名前, ルーズさ, 攻撃性, ブラフ頻度, ICM意識, 読みの強さ]
-// 読みの強さ = 相手のベット・レイズからどれだけ相手の手を絞るか（0: 気にしない 〜 1: 強く信じる）
+// CPUの設定値（タイプ TY とネームドCPU NC で共通）
+//   l: ルーズさ / a: 攻撃性 / b: ブラフ頻度 / icm: ICM意識（1でバブル付近を警戒）
+//   rd: 読みの強さ。相手のベット・レイズからどれだけ相手の手を絞るか（0: 気にしない 〜 1: 強く信じる）
+//   fd: 降りやすさ。フロップ以降でベットを受けたときのコールの基準をずらす（−で降りない・＋ですぐ降りる）
+//   bs: ブラフの強さ。ブラフする手の幅と頻度を増やす（0: 増やさない）
+//   vz: 価値ベットの額（強い手で打つ・レイズする額の倍率） / bz: ブラフの額（弱い手で打つ・レイズする額の倍率）
+//   pn: ベット判断の乱れ。打つか打たないかを手の強さと関係なく決める割合（0: 乱れない）
+// 書かなかった値は CPU0 の値になる。CPU0 は「この設定を足す前と同じ動き」になる値
+const CPU0 = { icm: 0, fd: 0, bs: 0, vz: 1, bz: 1, pn: 0 };
 const TY = [
-  ["タイト", 0.2, 0.35, 0.1, 0, 0.7],
-  ["ルースアグレ", 0.7, 0.75, 0.35, 0, 0.4],
-  ["コーラー", 0.8, 0.15, 0.02, 0, 0.1],
-  ["マニアック", 0.95, 0.9, 0.5, 0, 0.2],
-  ["バランス", 0.45, 0.5, 0.2, 0, 0.5],
-  ["ICM意識", 0.4, 0.45, 0.15, 1, 0.6],
+  { name: "タイト", l: 0.2, a: 0.35, b: 0.1, rd: 0.7 },
+  { name: "ルースアグレ", l: 0.7, a: 0.75, b: 0.35, rd: 0.4 },
+  { name: "コーラー", l: 0.8, a: 0.15, b: 0.02, rd: 0.1 },
+  { name: "マニアック", l: 0.95, a: 0.9, b: 0.5, rd: 0.2 },
+  { name: "バランス", l: 0.45, a: 0.5, b: 0.2, rd: 0.5 },
+  { name: "ICM意識", l: 0.4, a: 0.45, b: 0.15, icm: 1, rd: 0.6 },
 ];
 const NM =
   "Aki Ren Sora Yuu Hina Kai Mio Rin Haru Ken Nao Sho Mei Ryo Yui Dai Emi Jun Ayu Tom Saki Riku Nana Ito Mao Taku Rei Kou Mana Shin Ami Lee Max Eva Leo Zoe Jin Noa Hal".split(
@@ -278,11 +285,11 @@ function ai(p, c) {
     return RR(Math.round(c.cur + (c.pot + c.toCall) * (0.5 + R() * 0.4)));
   return a >= po + 0.1 - 0.15 * l ? CL : F;
 }
+// ネームドCPU。設定値の意味は CPU0 の上のコメントを参照（col: 名前の色）
 const NC = [
-  // [名前, 色, ルーズさ, 攻撃性, ブラフ頻度, 読みの強さ]
-  ["Croque", "#9acd32", 0.5, 0.55, 0.25, 0.7],
-  ["Hubris", "#4fc3f7", 0.5, 0.5, 0.2, 0.7],
-  ["Kaina", "#ff8ac8", 0.3, 0.4, 0.1, 0.8],
+  { name: "Croque", col: "#9acd32", l: 0.5, a: 0.55, b: 0.25, rd: 0.7 },
+  { name: "Hubris", col: "#4fc3f7", l: 0.5, a: 0.5, b: 0.2, rd: 0.7 },
+  { name: "Kaina", col: "#ff8ac8", l: 0.3, a: 0.4, b: 0.1, rd: 0.8 },
 ];
 // ドローがあるか（フラッシュドロー、またはストレートドロー）。手札が絡んでいるものだけ
 function draw(h, B) {
@@ -566,34 +573,50 @@ function ai2(p, c) {
   }
   const a = s - (c.toCall ? 0.04 : 0),
     tx = wet(B),
-    spr = st / (c.pot || 1);
+    spr = st / (c.pot || 1),
+    // ベット・レイズの額に、価値ベットの額（vz）・ブラフの額（bz）の倍率をかける
+    // 強い手か弱い手かは、あなたの傾向の記録（track）と同じ基準（tier が2以上か）で分ける
+    // base はそのアクションで最低限そろえる額（ベットなら0、レイズなら今のベット額）
+    zm = p.vz === p.bz ? p.vz : tier(p.h, B) >= 2 ? p.vz : p.bz,
+    sz = (base, x) => (zm === 1 ? x : base + (x - base) * zm),
+    BT = (x) => RR(sz(0, c.pot * x)),
+    RX = (x) => RR(sz(c.cur, x));
   if (c.toCall == 0) {
+    // ベット判断の乱れ（pn）：一定の割合で、手の強さと関係なく打つか打たないかを決める
+    if (p.pn && R() < p.pn) return R() < 0.5 ? BT(0.4 + R() * 0.6) : CL;
     if (a >= 0.6 && spr <= 3) return RR(1e9);
     if (k == "Croque") {
       if (tx < 2) {
-        if (R() < (p.pfr ? 0.7 : 0.4)) return RR(c.pot * 0.33);
-      } else if (a >= 0.6 || (a >= 0.4 && R() < 0.35)) return RR(c.pot * (0.66 + R() * 0.1));
+        if (R() < (p.pfr ? 0.7 : 0.4)) return BT(0.33);
+      } else if (a >= 0.6 || (a >= 0.4 && R() < 0.35)) return BT(0.66 + R() * 0.1);
       return CL;
     }
     if (k == "Hubris") {
       const z = [0.33, 0.5, 0.75][(R() * 3) | 0];
-      if (a >= 0.62 || (a >= 0.2 && a < 0.45 && R() < (z / (1 + 2 * z)) * 0.7))
-        return RR(c.pot * z);
+      if (a >= 0.62 || (a >= 0.2 && a < 0.45 && R() < (z / (1 + 2 * z)) * 0.7)) return BT(z);
       if (L == 3 && a >= 0.35 && a < 0.5 && R() < 0.1) return RR(1e9);
       return CL;
     }
-    if (a >= 0.62 && R() < 0.5 + 0.45 * ag) return RR(c.pot * (a >= 0.8 ? 0.7 : 0.5 + R() * 0.2));
-    if (p.pfr && L == 3 && c.L <= 2 && R() < 0.35 + 0.4 * ag) return RR(c.pot * 0.4);
-    if (a > 0.22 && a < 0.4 && R() < p.b * 0.3 && k != "Kaina") return RR(c.pot * 0.5);
+    if (a >= 0.62 && R() < 0.5 + 0.45 * ag) return BT(a >= 0.8 ? 0.7 : 0.5 + R() * 0.2);
+    if (p.pfr && L == 3 && c.L <= 2 && R() < 0.35 + 0.4 * ag) return BT(0.4);
+    // ブラフ。ブラフの強さ（bs）が大きいほど、弱い手まで・高い頻度でブラフする
+    if (a > 0.22 - 0.15 * p.bs && a < 0.4 && R() < p.b * 0.3 + p.bs * 0.3 && k != "Kaina")
+      return BT(0.5);
     return CL;
   }
+  // コールに必要な強さ。降りやすさ（fd）の分だけずらす
   const need =
-    po + 0.03 - 0.1 * l + (k == "Kaina" ? 0.08 : 0) + (k == "Croque" && !ft && po > 0.4 ? 0.12 : 0);
+    po +
+    0.03 -
+    0.1 * l +
+    (k == "Kaina" ? 0.08 : 0) +
+    (k == "Croque" && !ft && po > 0.4 ? 0.12 : 0) +
+    p.fd * 0.25;
   if (k == "Croque" && !ft && c.toCall >= st * 0.5 && a < 0.82 && M > 5) return F;
   // チェックレイズ：このストリートでチェックしたあとにベットされたとき
   // 強い手で反撃するほか、ドローでセミブラフする（Kaina は従来どおりブラフ系のレイズをしない）
   if (p.ck == L && !p.bet && c.toCall < st) {
-    const raise = RR(c.cur * (2.5 + R() * 0.5));
+    const raise = RX(c.cur * (2.5 + R() * 0.5));
     if (a >= 0.7 && R() < 0.25 + 0.4 * ag) return raise;
     // セミブラフはフロップだけ。よく打ってくる相手ほど増やし、めったに打たない相手には控える
     const bettor = c.ps.find((q) => q != p && !q.fold && q.bet == c.cur),
@@ -603,11 +626,11 @@ function ai2(p, c) {
   if (
     a >= 0.88 ||
     (a >= 0.7 && R() < ag * 0.35) ||
-    (a >= 0.3 && a < 0.5 && L < 5 && R() < p.b * 0.08 && c.toCall < c.pot * 0.6)
+    (a >= 0.3 && a < 0.5 && L < 5 && R() < p.b * 0.08 + p.bs * 0.1 && c.toCall < c.pot * 0.6)
   )
-    return RR(c.cur + (c.pot + c.toCall) * (0.6 + R() * 0.4));
+    return RX(c.cur + (c.pot + c.toCall) * (0.6 + R() * 0.4));
   if (a >= need) return CL;
-  return po < 0.34 && a >= 0.28 && R() < 0.18 + 0.25 * l ? CL : F;
+  return po < 0.34 && a >= 0.28 && R() < (0.18 + 0.25 * l) * (1 - p.fd) ? CL : F;
 }
 function* hand(T) {
   const lg = (s) => {
@@ -1051,7 +1074,7 @@ setInterval(tmr, 500);
 // 大会の始めに MEM_DECAY 倍に縮めるので、打ち方を変えれば何大会かで追いつく
 const MEMK = "mtt5mem",
   MEM_DECAY = 0.7,
-  KEEP = ["hero", ...NC.map((n) => n[0])];
+  KEEP = ["hero", ...NC.map((n) => n.name)];
 function loadMem(p) {
   p.mem = new Map();
   try {
@@ -1189,31 +1212,26 @@ function begin() {
     G.P.push(
       i && i < 4
         ? {
+            ...CPU0,
+            ...NC[i - 1],
             id: i,
-            name: NC[i - 1][0],
-            k: NC[i - 1][0],
-            oid: NC[i - 1][0],
-            col: NC[i - 1][1],
+            k: NC[i - 1].name,
+            oid: NC[i - 1].name,
             ty: ["ネームド"],
-            l: NC[i - 1][2],
-            a: NC[i - 1][3],
-            b: NC[i - 1][4],
-            rd: NC[i - 1][5],
             stack: 1e4,
             re: 0,
             alive: 1,
           }
         : i
           ? {
+              ...CPU0,
+              ...t,
               id: i,
               name: nm[i - 1],
               oid: "c" + i,
-              ty: t,
-              l: t[1] + (R() - 0.5) * 0.1,
-              a: t[2] + (R() - 0.5) * 0.1,
-              b: t[3],
-              icm: t[4],
-              rd: t[5],
+              ty: [t.name],
+              l: t.l + (R() - 0.5) * 0.1,
+              a: t.a + (R() - 0.5) * 0.1,
               stack: 1e4,
               re: 0,
               alive: 1,
