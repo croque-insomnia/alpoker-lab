@@ -128,7 +128,7 @@ globalThis.ai2 = function (p, c) {
 
 const KINDS = [...TY.map((t) => t[0]), ...NC.map((n) => n[0])];
 function mk(id, kind) {
-  const base = { id, name: kind, kind, stack: 1e4, re: 0, alive: 1 };
+  const base = { id, oid: kind + ":" + id, name: kind, kind, stack: 1e4, re: 0, alive: 1 };
   if (kind == "value" || kind == "bluff")
     return { ...base, bot: kind, ty: [kind], l: 0.5, a: 0.5, b: 0 };
   const n = NC.find((n) => n[0] == kind);
