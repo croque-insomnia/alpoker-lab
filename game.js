@@ -25,6 +25,10 @@ const LV = [
 //   vz: 価値ベットの額（強い手で打つ・レイズする額の倍率） / bz: ブラフの額（弱い手で打つ・レイズする額の倍率）
 //   pn: ベット判断の乱れ。打つか打たないかを手の強さと関係なく決める割合（0: 乱れない）
 // 書かなかった値は CPU0 の値になる。CPU0 は「この設定を足す前と同じ動き」になる値
+// TY だけで使う欄：
+//   w: 出てくる割合の重み（整数。書かなければ1。2にすると他のタイプの2倍出る）
+//   vary: 一人ひとりの個人差の幅。{ vz: 0.3 } なら vz が ±0.3 の範囲でばらつく
+//   （ルーズさ・攻撃性は vary に書かなくても ±0.05 ばらつく）
 const CPU0 = { icm: 0, fd: 0, bs: 0, vz: 1, bz: 1, pn: 0 };
 const TY = [
   { name: "タイト", l: 0.2, a: 0.35, b: 0.1, rd: 0.7 },
@@ -33,7 +37,31 @@ const TY = [
   { name: "マニアック", l: 0.95, a: 0.9, b: 0.5, rd: 0.2 },
   { name: "バランス", l: 0.45, a: 0.5, b: 0.2, rd: 0.5 },
   { name: "ICM意識", l: 0.4, a: 0.45, b: 0.15, icm: 1, rd: 0.6 },
+  // ライトプレイヤー：ゆるく参加して相手はほとんど読まず、降りにくい。
+  // ベット圧が手の強さと合っておらず、強い手で小さく・ブラフで大きく打つ癖がある（癖の強さは人による）
+  {
+    name: "ライト",
+    l: 0.65,
+    a: 0.45,
+    b: 0.3,
+    rd: 0.1,
+    fd: -0.2,
+    bs: 0.3,
+    vz: 0.6,
+    bz: 1.8,
+    pn: 0.3,
+    vary: { vz: 0.3, bz: 0.6, pn: 0.2 },
+  },
 ];
+// タイプの割り当て順。w の数だけ同じタイプを並べ、CPUに順番に割り当てる
+const TYC = TY.flatMap((t) => Array(t.w ?? 1).fill(t));
+// タイプから1人分の設定値を作る（個人差もここで付ける）
+function fromType(t) {
+  const { w, vary, ...v } = t,
+    p = { ...CPU0, ...v, ty: [t.name], l: t.l + (R() - 0.5) * 0.1, a: t.a + (R() - 0.5) * 0.1 };
+  for (const k in vary || {}) p[k] = Math.max(0, t[k] + (R() - 0.5) * 2 * vary[k]);
+  return p;
+}
 const NM =
   "Aki Ren Sora Yuu Hina Kai Mio Rin Haru Ken Nao Sho Mei Ryo Yui Dai Emi Jun Ayu Tom Saki Riku Nana Ito Mao Taku Rei Kou Mana Shin Ami Lee Max Eva Leo Zoe Jin Noa Hal".split(
     " ",
@@ -1208,7 +1236,7 @@ function begin() {
   const nm = shf([...NM]);
   G.P = [];
   for (let i = 0; i < 40; i++) {
-    const t = TY[i % 6];
+    const t = TYC[i % TYC.length];
     G.P.push(
       i && i < 4
         ? {
@@ -1224,14 +1252,10 @@ function begin() {
           }
         : i
           ? {
-              ...CPU0,
-              ...t,
+              ...fromType(t),
               id: i,
               name: nm[i - 1],
               oid: "c" + i,
-              ty: [t.name],
-              l: t.l + (R() - 0.5) * 0.1,
-              a: t.a + (R() - 0.5) * 0.1,
               stack: 1e4,
               re: 0,
               alive: 1,
