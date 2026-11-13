@@ -326,6 +326,81 @@ function tier(h, B) {
   if (B.length < 5 && draw(h, B)) return 1;
   return 0;
 }
+// ---- プレイヤー自身の打ち方の記録（あなたの傾向。エクスポートしてネームドCPU作りに使う）----
+// p.rec（記録の入れ物の配列）を持つ人だけを記録する。ゲームではあなた、調整ツールでは試しているCPU
+// 手札も含めた本人の正確な記録なので、CPUの観察（obs）とは別物
+// 各項目の意味は REC_KEYS を参照
+const REC_KEYS = {
+  hands: "配られたハンド数",
+  vpip: "自分から参加した",
+  pfr: "プリフロップでレイズした",
+  f3: "プリフロップでレイズを受けた",
+  b3: "そこでレイズし返した（3ベット）",
+  so: "ショートスタック（M10以下）で最初に参加を決める場面",
+  sp: "そこでオールインした",
+  sf: "フロップを見た",
+  sd: "ショーダウンまで行った",
+  agg: "フロップ以降にベット・レイズした",
+  call: "フロップ以降にコールした",
+  fb: "フロップ以降にベットを受けた",
+  fbF: "そこで降りた",
+  cto: "チェックで回ってきた",
+  bct: "そこでベットした",
+  cb: "チェックしたあとにベットを受けた",
+  cbR: "そこでチェックレイズした",
+  pb: "フロップ以降のベット・レイズ（手の強さが分かるもの）",
+  pbw: "そのうち弱い手（段階0〜1）だった",
+  nV: "強い手（段階2以上）でのベット・レイズの回数",
+  zV: "その額（ポットに対する倍率）の合計",
+  qV: "その額の2乗の合計（ばらつきの計算用）",
+  nB: "弱い手でのベット・レイズの回数",
+  zB: "その額の合計",
+  qB: "その額の2乗の合計",
+  sO: "強い手で、自分から打てる場面（誰も打っていない）",
+  sC: "そこでチェックした（スロープレイ）",
+};
+function track(p, c, t, z, x) {
+  const inc = (k, v = 1) => p.rec.forEach((r) => (r[k] = (r[k] || 0) + v));
+  if (!c.board.length) {
+    if (c.cur > c.bb && !p.hs.f3) {
+      p.hs.f3 = 1;
+      inc("f3");
+      if (t == "r") inc("b3");
+    }
+    if (c.cur <= c.bb && x.M <= 10 && !p.hs.so) {
+      p.hs.so = 1;
+      inc("so");
+      if (t == "r" && p.allin) inc("sp");
+    }
+    return;
+  }
+  const tr = tier(p.h, c.board);
+  if (t == "r") {
+    const k = tr < 2 ? "B" : "V";
+    inc("agg");
+    inc("pb");
+    if (tr < 2) inc("pbw");
+    inc("n" + k);
+    inc("z" + k, z);
+    inc("q" + k, z * z);
+  } else if (t == "c" && c.toCall > 0) inc("call");
+  if (c.toCall > 0) {
+    inc("fb");
+    if (t == "f") inc("fbF");
+  }
+  if (x.cto) {
+    inc("cto");
+    if (t == "r") inc("bct");
+  }
+  if (x.ckb) {
+    inc("cb");
+    if (t == "r") inc("cbR");
+  }
+  if (!c.toCall && tr >= 2) {
+    inc("sO");
+    if (t != "r") inc("sC");
+  }
+}
 // 相手 q が手札 h を持っている「ありそうさ」（0〜1）。q のこのハンドでのアクションから判断する
 // 段階ごとの受け入れ率 [何もない, 弱い, 中くらい, 強い]
 const FIT = { bet: [0.35, 0.7, 1, 1], big: [0.2, 0.4, 0.8, 1], raise: [0.12, 0.25, 0.5, 1] };
@@ -553,6 +628,7 @@ function* hand(T) {
     p.pc = 0; // プリフロップで自分からコールした
     p.ag = {}; // フロップ以降のベット・レイズ { ボード枚数: { z: ポットに対する額, r: レイズか } }
     p.ck = 0; // 最後にチェックしたストリート（ボード枚数）
+    p.hs = {}; // 自分の記録用：このハンドで数えたもの
   });
   const A = T.p.filter((p) => p.stack > 0),
     n = A.length;
@@ -631,6 +707,11 @@ function* hand(T) {
       };
       // チェックで回ってきたか（このストリートで誰かがチェックしたあと、まだ誰も打っていない）
       const cto = bd.length && !c.toCall && ps.some((q) => q != p && !q.fold && q.acted);
+      // 自分の記録用：チェックしたあとにベットを受けたか、行動前のスタックの厚さ（M）
+      const ckb = bd.length && p.ck == bd.length && !p.bet && c.toCall > 0,
+        M0 = p.stack / (sb + bb + n * an);
+      let act = "c",
+        z = 0;
       const a = p.hero ? yield { k: "hero", p, c } : ai2(p, c);
       if (cto)
         watch(p, (o) => {
@@ -640,6 +721,7 @@ function* hand(T) {
       let x = a.x;
       if (!p.hero && a.t == "r" && x >= (p.bet + p.stack) * 0.55) x = p.bet + p.stack;
       if (a.t == "f" && c.toCall > 0) {
+        act = "f";
         p.fold = 1;
         lg(p.name + " フォールド");
       } else if (a.t == "r" && Math.min(x, p.bet + p.stack) > cur) {
@@ -647,6 +729,8 @@ function* hand(T) {
         let X = Math.min(Math.round(x), mx);
         if (X < cur + minR && X < mx) X = Math.min(cur + minR, mx);
         const old = cur;
+        act = "r";
+        z = (X - p.bet) / (c.pot || 1);
         if (!bd.length) {
           if (old > bb) p.p3 = 1;
           p.pfr = 1;
@@ -671,12 +755,21 @@ function* hand(T) {
         put(p, k);
         lg(p.name + (k ? ` コール ${fb(k)}BB` : " チェック") + (p.allin ? " (オールイン)" : ""));
       }
+      if (p.rec) track(p, c, act, z, { cto, ckb, M: M0 });
       p.acted = 1;
       yield { k: "tick" };
     }
   }
   yield* rnd(n == 2 ? 0 : 3 % n);
   reveal();
+  // 自分の記録：ハンド数・参加・レイズ
+  for (const q of ps)
+    if (q.rec)
+      q.rec.forEach((r) => {
+        r.hands = (r.hands || 0) + 1;
+        if (q.pc || q.pfr) r.vpip = (r.vpip || 0) + 1;
+        if (q.pfr) r.pfr = (r.pfr || 0) + 1;
+      });
   ps.forEach(
     (q) =>
       (q.pc || q.pfr) &&
@@ -687,6 +780,7 @@ function* hand(T) {
   );
   for (const k of [3, 1, 1]) {
     if (live().length < 2) break;
+    if (k == 3) for (const q of live()) if (q.rec) q.rec.forEach((r) => (r.sf = (r.sf || 0) + 1));
     for (let j = 0; j < k; j++) bd.push(d.pop());
     ps.forEach((p) => {
       p.bet = 0;
@@ -704,6 +798,7 @@ function* hand(T) {
     L.forEach((p) => {
       p.v = best(p.h.concat(bd));
       p.show = 1;
+      if (p.rec) p.rec.forEach((r) => (r.sd = (r.sd || 0) + 1));
       lg(`${p.name}：${p.h.map((c) => cd(c)).join("")}（${HN[(p.v / 1e10) | 0]}）`);
       // ベット・レイズしたストリートで実際に弱い手だったかを、見ていた人が記録する
       for (const st of [3, 4, 5])
@@ -793,6 +888,7 @@ function end() {
     h = G.hero;
   bust(T);
   saveMem();
+  saveMe();
   G.wait = 1;
   render();
   if (h.stack <= 0) {
@@ -840,6 +936,7 @@ function reent() {
 function fin() {
   const h = G.hero;
   saveMem();
+  saveMe();
   h.alive = 0;
   G.ask = 0;
   const pl = alive() + 1,
@@ -977,6 +1074,110 @@ function saveMem() {
     localStorage.setItem(MEMK, JSON.stringify(all));
   } catch (e) {}
 }
+// ---- あなたの記録の保存・表示・エクスポート ----
+// all: 累計 / recent: 直近（大会の始めに ME_DECAY 倍に縮めるので、最近の大会ほど重い）
+// 表示・エクスポートの指標は「直近 ＋ 累計を最大 ME_PRIOR ハンド分の重みに縮めたもの」から計算する
+const MEK = "mtt5me",
+  ME_DECAY = 0.75,
+  ME_PRIOR = 100;
+function loadMe() {
+  try {
+    const m = JSON.parse(localStorage.getItem(MEK));
+    if (m && m.v == 1) return m;
+  } catch (e) {}
+  return { v: 1, tn: 0, all: {}, recent: {} };
+}
+function saveMe() {
+  try {
+    localStorage.setItem(MEK, JSON.stringify(G.me));
+  } catch (e) {}
+}
+// 表示する指標 [名前, 分子, 分母, 表し方]
+const ME_ROWS = [
+  ["VPIP（参加率）", "vpip", "hands", "%"],
+  ["PFR（レイズ率）", "pfr", "hands", "%"],
+  ["3ベット率", "b3", "f3", "%"],
+  ["AF（攻撃性）", "agg", "call", "x"],
+  ["ベットされたら降りる率", "fbF", "fb", "%"],
+  ["チェックで回ってきたら打つ率", "bct", "cto", "%"],
+  ["チェックレイズ率", "cbR", "cb", "%"],
+  ["ベットのうち弱い手の割合", "pbw", "pb", "%"],
+  ["強い手のベット額（ポット比）", "zV", "nV", "p"],
+  ["弱い手のベット額（ポット比）", "zB", "nB", "p"],
+  ["強い手でチェックする率", "sC", "sO", "%"],
+  ["ショーダウン到達率", "sd", "sf", "%"],
+  ["ショートでのオールイン率", "sp", "so", "%"],
+];
+function meBlend(m) {
+  const w = Math.min(1, ME_PRIOR / Math.max(1, m.all.hands || 0)),
+    b = {};
+  for (const k of Object.keys(REC_KEYS)) b[k] = (m.recent[k] || 0) + (m.all[k] || 0) * w;
+  return b;
+}
+function meStats(m) {
+  const b = meBlend(m),
+    f = (r, x) => (x == null ? "—" : r == "%" ? Math.round(x * 100) + "%" : x.toFixed(2)),
+    v = (o, n, d) => (o[d] > 0 ? (o[n] || 0) / o[d] : null);
+  return ME_ROWS.map(([name, n, d, r]) => ({
+    name,
+    key: n + "/" + d,
+    blend: v(b, n, d),
+    all: v(m.all, n, d),
+    count: Math.round(m.all[d] || 0),
+    text: [f(r, v(b, n, d)), f(r, v(m.all, n, d))],
+  }));
+}
+function renderMe() {
+  const m = loadMe(),
+    el = $("me");
+  if (!el) return;
+  if (!m.all.hands) {
+    el.innerHTML = "";
+    return;
+  }
+  el.innerHTML = `<details><summary>あなたの傾向（${m.tn}大会・累計${Math.round(m.all.hands)}ハンド）</summary>
+<table><tr><td>指標</td><td>直近重視</td><td>累計</td><td>回数（累計）</td></tr>${meStats(m)
+    .map(
+      (r) =>
+        `<tr><td>${r.name}</td><td>${r.text[0]}</td><td>${r.text[1]}</td><td>${r.count}</td></tr>`,
+    )
+    .join("")}</table>
+<p>名前 <input id="mename" value="あなた" size="10"> <button onclick="exportMe()">エクスポート</button><button class="g" onclick="resetMe()">記録をリセット</button></p></details>`;
+}
+// 調整ツール（tools/fit.js）に渡すファイルを書き出す
+function exportMe() {
+  const m = loadMe(),
+    name = ($("mename").value || "あなた").trim(),
+    data = {
+      format: "alpoker-profile",
+      version: 1,
+      name,
+      exportedAt: new Date().toISOString(),
+      tournaments: m.tn,
+      blend: { decay: ME_DECAY, prior: ME_PRIOR },
+      keys: REC_KEYS,
+      all: m.all,
+      recent: m.recent,
+      summary: Object.fromEntries(meStats(m).map((r) => [r.name, r.blend])),
+    },
+    a = document.createElement("a");
+  a.href = URL.createObjectURL(
+    new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }),
+  );
+  // 日本語のファイル名は環境によって無視されるので、ファイル名は日付だけにする（名前は中身に入る）
+  a.download = `alpoker-profile-${data.exportedAt.slice(0, 10).replace(/-/g, "")}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+function resetMe() {
+  if (!confirm("あなたの傾向の記録をすべて消します。よろしいですか？")) return;
+  try {
+    localStorage.removeItem(MEK);
+  } catch (e) {}
+  renderMe();
+}
 function begin() {
   G = { dur: +$("spd").value * 6e4, lv: 0, entries: 40, lg: [], ty: ls() };
   $("tyc").checked = G.ty;
@@ -1021,6 +1222,12 @@ function begin() {
     );
   }
   G.P.filter((p) => p.k).forEach(loadMem);
+  // あなたの記録：直近の記録を縮めてから、この大会の記録を足していく
+  G.me = loadMe();
+  for (const k in G.me.recent) G.me.recent[k] *= ME_DECAY;
+  G.me.tn++;
+  G.P[0].rec = [G.me.all, G.me.recent];
+  saveMe();
   const sh = shf([...G.P]);
   G.tables = [];
   for (let i = 0; i < 8; i++) G.tables.push({ p: sh.slice(i * 5, i * 5 + 5), btn: -1 });
@@ -1042,3 +1249,4 @@ function begin() {
   $("game").hidden = 0;
   nx();
 }
+renderMe();
