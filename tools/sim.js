@@ -133,15 +133,7 @@ function mk(id, kind) {
     return { ...base, bot: kind, ty: [kind], l: 0.5, a: 0.5, b: 0 };
   const n = NC.find((n) => n.name == kind);
   if (n) return { ...CPU0, ...n, ...base, k: n.name, ty: ["ネームド"] };
-  const t = TY.find((t) => t.name == kind);
-  return {
-    ...CPU0,
-    ...t,
-    ...base,
-    ty: [t.name],
-    l: t.l + (Math.random() - 0.5) * 0.1,
-    a: t.a + (Math.random() - 0.5) * 0.1,
-  };
+  return { ...fromType(TY.find((t) => t.name == kind)), ...base };
 }
 
 // 40人参加・バブル前（ICMの補正がかからない状態）として扱う
