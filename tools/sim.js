@@ -6,7 +6,8 @@
 //   node tools/sim.js value [ハンド数] [seed]   … バリューボット（良い手のときだけ大きく打つ）の勝ち具合
 //   node tools/sim.js bluff [ハンド数] [seed]   … ブラフボット（チェックで回ってきたら必ず打つ）の勝ち具合
 //
-// 1ハンドごとにスタックを 10000点（50BB）に戻して測る。プレイヤーはハンドをまたいで同じ人が続く。BB/100 は100ハンドあたりの増減（BB単位）。
+// 1ハンドごとにスタックを 10000点（50BB）に戻して測る。プレイヤーはハンドをまたいで同じ人が続き、
+// 卓は BLOCK ハンドごとに席替えする（詳しくは下の「40人参加」のところ）。BB/100 は100ハンドあたりの増減（BB単位）。
 // 8000ハンドで誤差はおおよそ ±13 BB/100。
 const fs = require("fs"),
   vm = require("vm"),
@@ -139,19 +140,19 @@ function mk(id, kind) {
 // 40人参加・バブル前（ICMの補正がかからない状態）として扱う
 __setG({ lv: 0, entries: 40, lg: [], T: {}, P: Array.from({ length: 40 }, () => ({ alive: 1 })) });
 // プレイヤーはハンドをまたいで同じ人が続く（CPUが相手の傾向を覚えられるように）
-// 40人のCPUから毎ハンド5人（ボット対戦では4人＋ボット）を選んで卓を作る
-const pool = Array.from({ length: 40 }, (_, i) =>
-    mk(i + 1, KINDS[(Math.random() * KINDS.length) | 0]),
-  ),
+// 40人のCPUは、各タイプ・各ネームドCPUを同じ人数ずつ入れる（シードによって顔ぶれが偏らないように）
+// 卓は5人（ボット対戦では4人＋ボット）で、BLOCK ハンドのあいだ同じ顔ぶれのまま回す
+// （実際の大会のように、同じ卓で相手の記憶が溜まるように）
+const BLOCK = 100;
+const pool = Array.from({ length: 40 }, (_, i) => mk(i + 1, KINDS[i % KINDS.length])),
   me = mode == "cpu" ? null : mk(0, mode);
+let T = null;
 for (let h = 0; h < HANDS; h++) {
-  const ps = me ? [me] : [];
-  while (ps.length < 5) {
-    const q = pool[(Math.random() * pool.length) | 0];
-    if (!ps.includes(q)) ps.push(q);
+  if (h % BLOCK == 0) {
+    const ps = (me ? [me] : []).concat(shf([...pool]).slice(0, me ? 4 : 5));
+    T = { p: ps, btn: ps[(Math.random() * 5) | 0].id };
   }
-  ps.forEach((p) => (p.stack = 1e4));
-  const T = { p: ps, btn: ps[(Math.random() * 5) | 0].id };
+  T.p.forEach((p) => (p.stack = 1e4));
   seen = new Map(T.p.map((p) => [p, {}]));
   const it = hand(T);
   while (!it.next().done);

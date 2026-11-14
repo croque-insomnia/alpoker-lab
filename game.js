@@ -444,7 +444,24 @@ const FIT = { bet: [0.35, 0.7, 1, 1], big: [0.2, 0.4, 0.8, 1], raise: [0.12, 0.2
 //   n: 一緒に配られたハンド数 / vp: 自分から参加した / pr: プリフロップでレイズした
 //   cto・bct: チェックで回ってきた回数・そこでベットした回数
 //   sb・sw: ショーダウンで手が見えたベット・レイズの数・そのうち弱い手（段階0〜1）だった数
-const newObs = () => ({ n: 0, vp: 0, pr: 0, cto: 0, bct: 0, sb: 0, sw: 0 });
+//   sbL・swL / sbS・swS: 上のうちレイズ以外のベットを、額の大小（BIGZ 以上か）で分けたもの
+//   saL / saS: そのうち「何もない手（段階0）」だった数。ペアやドローで捕まえられる本当のブラフ
+//     （ベット額に癖がある相手、たとえば「ブラフで大きく打つ」相手を見抜くため）
+const newObs = () => ({
+  n: 0,
+  vp: 0,
+  pr: 0,
+  cto: 0,
+  bct: 0,
+  sb: 0,
+  sw: 0,
+  sbL: 0,
+  swL: 0,
+  sbS: 0,
+  swS: 0,
+  saL: 0,
+  saS: 0,
+});
 function obs(p, q) {
   p.mem ??= new Map();
   let o = p.mem.get(q.oid);
@@ -458,10 +475,29 @@ const BTC0 = 0.4;
 // ショーダウンで見えたベットのうち、弱い手だった割合の標準値。
 // ブラフで降ろした手は見えないため、見えた割合は SDW_UP 倍して使う
 const SDW0 = 0.25,
-  SDW_UP = 1.3;
+  SDW_UP = 1.3,
+  // 「大きいベット」とみなす額（ポットに対する倍率）
+  BIGZ = 0.75,
+  // ショーダウンで見えたベットのうち、何もない手（段階0）だった割合の標準値
+  SDA0 = 0.1;
 function btc(p, q) {
   const o = obs(p, q);
   return rate(o.bct, o.cto, BTC0, 10);
+}
+// p から見た、q が額 z のベットで弱い手を見せる割合（ショーダウンの記憶から。z が null ならレイズ）
+// 返り値: { r: 割合の見積もり, n: その額のベットを見た回数 }
+// air: 同じく「何もない手」だった割合（ベットのときだけ。標準値は SDA0）
+function weakRate(p, q, z) {
+  const o = obs(p, q),
+    r0 = Math.min(1, rate(o.sw * SDW_UP, o.sb, SDW0, 6));
+  if (z == null) return { r: r0, n: o.sb, air: 0 };
+  const big = z >= BIGZ,
+    n = big ? o.sbL : o.sbS;
+  return {
+    r: Math.min(1, rate((big ? o.swL : o.swS) * SDW_UP, n, r0, 4)),
+    air: Math.min(1, rate((big ? o.saL : o.saS) * SDW_UP, n, SDA0, 4)),
+    n,
+  };
 }
 // 観察した参加率から見積もった、相手のルーズさ（0〜1。CPUタイプの「ルーズさ」とほぼ同じ尺度）
 function loose(p, q) {
@@ -477,7 +513,8 @@ function fit(p, q, h, B) {
     cutC = Math.min(0.9, Math.max(0.25, rate(o.vp, o.n, 0.3, 10) * 1.8)),
     cut = q.p3 ? 0.08 : q.pfr ? cutR : q.pc ? cutC : 1,
     // ショーダウンで弱い手のベットをよく見せている相手ほど、ベットに弱い手が混ざっていると見る
-    bf = Math.min(3, Math.max(0.3, Math.min(1, rate(o.sw * SDW_UP, o.sb, SDW0, 6)) / SDW0));
+    // bfOf: 弱い手の割合から、受け入れ率にかける倍率を出す
+    bfOf = (r) => Math.min(3, Math.max(0.3, r / SDW0));
   let w = PF[hcls(h)].pct > cut ? 0.1 : 1;
   for (const L of [3, 4, 5]) {
     const g = q.ag[L];
@@ -491,7 +528,8 @@ function fit(p, q, h, B) {
       if (b > BTC0) f += ((1 - f) * (b - BTC0)) / (1 - BTC0);
       else if (t < 2) f *= b / BTC0;
     }
-    if (t < 2) f = Math.min(1, f * bf);
+    // ベットは額の大小ごとの記録を使う（記録が少ないうちは全体の割合 r0 に寄せる）。レイズは全体の記録
+    if (t < 2) f = Math.min(1, f * bfOf(weakRate(p, q, g.r ? null : g.z).r));
     w *= f;
   }
   return w;
@@ -657,6 +695,21 @@ function ai2(p, c) {
     (a >= 0.3 && a < 0.5 && L < 5 && R() < p.b * 0.08 + p.bs * 0.1 && c.toCall < c.pot * 0.6)
   )
     return RX(c.cur + (c.pot + c.toCall) * (0.6 + R() * 0.4));
+  // ブラフ読み：打ってきた相手が、同じくらいの額のベットで弱い手を見せる割合（記憶）を直接使う
+  // その額のベットをショーダウンで3回以上見ているときだけ。読みの強さ（rd）の確率で従う
+  //   ・何もない手（本当のブラフ）の割合がポットオッズより十分高い → ブラフに勝てる手（弱いペア・ドロー以上）でコール
+  //     （弱いペアやドローでのベットはブラフに数えない。それを捕まえるつもりでコールすると負けるため）
+  //   ・その額ではほとんど強い手しか見せていない → 勝ち目の薄い手は降りる
+  const bettor = c.ps.find((q) => q != p && !q.fold && q.bet == c.cur),
+    gb = bettor && bettor.ag[L];
+  if (gb && !gb.r && p.rd) {
+    const wr = weakRate(p, bettor, gb.z),
+      r = wr.r;
+    if (wr.n >= 3) {
+      if (wr.air > po * 1.3 && a < need && tier(p.h, B) >= 1 && R() < p.rd) return CL;
+      if (r < SDW0 * 0.6 && a >= need && a < need + 0.1 && R() < p.rd) return F;
+    }
+  }
   if (a >= need) return CL;
   return po < 0.34 && a >= 0.28 && R() < (0.18 + 0.25 * l) * (1 - p.fd) ? CL : F;
 }
@@ -854,10 +907,24 @@ function* hand(T) {
       // ベット・レイズしたストリートで実際に弱い手だったかを、見ていた人が記録する
       for (const st of [3, 4, 5])
         if (p.ag[st]) {
-          const weak = tier(p.h, bd.slice(0, st)) < 2;
+          const ts = tier(p.h, bd.slice(0, st)),
+            weak = ts < 2,
+            air = ts == 0,
+            g = p.ag[st],
+            big = g.z >= BIGZ;
           watch(p, (o) => {
             o.sb++;
             if (weak) o.sw++;
+            if (g.r) return;
+            if (big) {
+              o.sbL++;
+              if (weak) o.swL++;
+              if (air) o.saL++;
+            } else {
+              o.sbS++;
+              if (weak) o.swS++;
+              if (air) o.saS++;
+            }
           });
         }
     });
